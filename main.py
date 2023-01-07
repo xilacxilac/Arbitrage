@@ -7,17 +7,20 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 import config
 import asyncio
 
+# Prices to be stored to test for arbitrage
 price = {
     'ETH/USD': 0,
     'BTC/USD': 0,
     'ETH/BTC': 0
 }
 
+# Rest API and other clients
 rest_api = REST(config.API_KEY, config.SECRET_KEY, 'https://paper-api.alpaca.markets')
 crypto_client = CryptoHistoricalDataClient(config.API_KEY, config.SECRET_KEY)
 trading_client = TradingClient(config.API_KEY, config.SECRET_KEY, paper=True)
 
 
+# Main runner for arbitrage
 async def main():
     while True:
         try:
@@ -33,6 +36,7 @@ async def main():
             print('main() error: TimeoutError')
 
 
+# Get current ask price of a cryptocurrency
 async def get_current_price(crypto):
     try:
         crypto_latest_request_params = CryptoLatestQuoteRequest(symbol_or_symbols=crypto)
@@ -45,6 +49,7 @@ async def get_current_price(crypto):
         return False
 
 
+# Create a market order (technically limit order since Alpaca converts it to one)
 def order(symbol, qty, side):
     try:
         market_order_data = MarketOrderRequest(
@@ -62,6 +67,7 @@ def order(symbol, qty, side):
         return False
 
 
+# Get current position of a cryptocurrency
 def get_position(crypto):
     try:
         position = trading_client.get_open_position(crypto)
@@ -72,25 +78,32 @@ def get_position(crypto):
         return 0
 
 
+# Test for arbitrage conditions and do if conditions are met
 async def test_arb():
+    # Get prices
     ETH = price['ETH/USD']
     BTC = price['BTC/USD']
     ETHBTC = price['ETH/BTC']
-    ARB_DIV = ETH / BTC
 
-    x = 10000
-    BTC_START = x / BTC
-    ETH_START = x / ETH
+    # Value to test for arbitrage conditions
+    ARB_DIV = ETH / BTC
 
     # USD -> BTC -> ETH -> USD (BTC is cheaper)
     if ETHBTC > ARB_DIV * (1 + config.ARB_DIFF_REQ):
+        BTC_START = config.val / BTC
+        # Buy initial BTC
         if order('BTC/USD', BTC_START, OrderSide.BUY):
+            # Determine amount of ETH to buy
+            # 1.05 is added because Alpaca converts market orders to limit orders with 5% price collar
             BTC_NEW = get_position('BTCUSD')
             BTC_ETH = (BTC_NEW / ETHBTC) / 1.05
+            # Convert BTC to ETH
             if order('ETH/BTC', BTC_ETH, OrderSide.BUY):
                 BTC_FINAL = get_position('ETHUSD')
+                # Sell Converted ETH
                 if order('ETH/USD', BTC_FINAL, OrderSide.SELL):
                     BTC_LEFT = get_position('BTCUSD')
+                    # Sell leftover BTC before conversion
                     if order('BTC/USD', BTC_LEFT, OrderSide.SELL):
                         print('Success: BTC')
                     else:
@@ -102,6 +115,7 @@ async def test_arb():
                     exit()
             else:
                 print('Order failed: BTC -> ETH (BTC)')
+                # Attempt a BTC sell back
                 if not order('BTC/USD', BTC_NEW, OrderSide.SELL):
                     print('Sell Back failed: BTC -> USD (BTC)')
                     exit()
@@ -111,13 +125,19 @@ async def test_arb():
 
     # USD -> ETH -> BTC -> USD (ETH is cheaper)
     elif ETHBTC < ARB_DIV * (1 - config.ARB_DIFF_REQ):
+        ETH_START = config.val / ETH
+        # Buy initial ETH
         if order('ETH/USD', ETH_START, OrderSide.BUY):
+            # Determine amount of BTC to buy
             ETH_NEW = get_position('ETHUSD')
             ETH_BTC = ETH_NEW * ETHBTC
+            # Convert ETH to BTC
             if order('ETH/BTC', ETH_BTC, OrderSide.SELL):
                 ETH_FINAL = get_position('BTCUSD')
+                # Sell converted BTC
                 if order('BTC/USD', ETH_FINAL, OrderSide.SELL):
                     ETH_LEFT = get_position('ETHUSD')
+                    # Sell leftover ETH before conversion
                     if order('ETH/USD', ETH_LEFT, OrderSide.SELL):
                         print('Success: ETH')
                     else:
@@ -129,6 +149,7 @@ async def test_arb():
                     exit()
             else:
                 print('Order failed: ETH -> BTC (ETH)')
+                # Attempt an ETH sell back
                 if not order('BTC/USD', ETH_NEW, OrderSide.SELL):
                     print('Sell Back failed: ETH -> USD (ETH)')
                     exit()
